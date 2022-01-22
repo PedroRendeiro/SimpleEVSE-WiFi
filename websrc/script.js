@@ -49,9 +49,13 @@ var fwUpdateIndex = 0;
 
 //Status
 var refreshSeconds;
+var register1002 = ["Modbus Error", "Ready", "Vehicle Detected", "Charging", "Charging with ventilation", "Failure"]
+
 
 window.onload = function () {
-
+  if (window.location.protocol === "https:") {
+    login();
+  }
 }
 
 //Script data for EVSE Control
@@ -73,6 +77,7 @@ function getEvseData() {
   websock.send("{\"command\":\"getevsedata\"}");
   return;
 }
+
 function listEVSEData(obj) {
   chargingTime = obj.evse_charging_time;
   evseActive = obj.evse_active;
@@ -96,7 +101,7 @@ function listEVSEData(obj) {
     $("#evseNotActive").addClass('hidden');
     $("#evseActive").removeClass('hidden');
   }
-  if (obj.evse_always_active || obj.evse_timer_active) { //Always Active Mode
+  if (obj.evse_always_active || obj.evse_vehicle_state < 2 || obj.evse_timer_active) { //Always Active Mode
     $("#evseNotActive").addClass('hidden');
     $("#evseActive").addClass('hidden');
   }
@@ -145,6 +150,7 @@ function listEVSEData(obj) {
       document.getElementById("currentSlider").max = obj.evse_maximum_current;
     }
     prevMaxCurrent = obj.evse_maximum_current;
+    document.getElementById("currentSlider").min = obj.evse_minimum_current;
   }
 
   if (obj.evse_slider_status === false) {
@@ -501,6 +507,14 @@ function initLogTable() {
     window.FooTable.init("#latestlogtable", {
       columns: [
         {
+          "name": "index",
+          "title": "Index",
+          "parser": function (value) {
+            return value
+          },
+          "visible": false
+        },
+        {
           "name": "timestamp",
           "title": "Date",
           "parser": function (value) {
@@ -541,7 +555,8 @@ function initLogTable() {
               return hours + ":" + minutes + ":" + seconds;
             }
             return minutes + ":" + seconds;
-          }
+          },
+          "breakpoints": "xs"
         },
         {
           "name": "energy",
@@ -572,7 +587,16 @@ function initLogTable() {
           "breakpoints": "xs sm",
         }
       ],
-      rows: logdata
+      rows: logdata,
+      editing: {
+        enabled: true,
+        alwaysShow: true,
+        allowAdd: false,
+        allowEdit: false,
+        deleteRow: function(row) {
+          deleteLog(parseInt(row.value.index))
+        }
+      }
     });
   });
   logtable = true;
@@ -951,7 +975,8 @@ function handleMeter() {
 
 function handleMeterFactor() {
   if (document.getElementById("meterphase").value === "3" ||
-      document.getElementById("smetertype").value === "SDM630") {
+      document.getElementById("smetertype").value === "SDM630"||
+      document.getElementById("smetertype").value === "OR_WE_517") {
     document.getElementById("factor").value = "1";
     document.getElementById("factor").disabled = true;;
   }
@@ -1217,6 +1242,27 @@ function backupset() {
   dlAnchorElem.click();
 }
 
+function backuplog() {
+  var url = "/getLog";
+  var xhr = new XMLHttpRequest();
+  xhr.open("get", url, true);
+  xhr.onload = function (e) {
+    if (xhr.readyState === 4) {
+      if (xhr.status === 200) {
+        var data = JSON.parse(xhr.responseText);
+        var dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(data, null, 2));
+        var dlAnchorElem = document.getElementById("downloadLog");
+        dlAnchorElem.setAttribute("href", dataStr);
+        dlAnchorElem.setAttribute("download", "evse-wifi-logs.json");
+        dlAnchorElem.click();
+      } else {
+        alert("Incorrect password!");
+      }
+    }
+  };
+  xhr.send(null);
+}
+
 function piccBackup(obj) {
   var dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(obj, null, 2));
   var dlAnchorElem = document.getElementById("downloadUser");
@@ -1244,6 +1290,42 @@ function restoreSet() {
           json.command = "configfile";
         }
         if (json.command === "configfile") {
+          var x = confirm("File seems to be valid, do you wish to continue?");
+          if (x) {
+            websock.send(JSON.stringify(json));
+            alert("Device now should reboot with new settings");
+            location.reload();
+          }
+        }
+        else {
+          alert("Not a valid backup file");
+          return;
+        }
+      };
+      reader.readAsText(input.files[0]);
+    }
+  }
+}
+
+function restoreLog() {
+  var input = document.getElementById("restoreLog");
+  var reader = new FileReader();
+  if ("files" in input) {
+    if (input.files.length === 0) {
+      alert("You did not select file to restore");
+    } else {
+      reader.onload = function () {
+        var json;
+        try {
+          json = JSON.parse(reader.result);
+        } catch (e) {
+          alert("Not a valid backup file");
+          return;
+        }
+        if (!json.hasOwnProperty("command")) {
+          json.command = "logfile";
+        }
+        if (json.command === "logfile") {
           var x = confirm("File seems to be valid, do you wish to continue?");
           if (x) {
             websock.send(JSON.stringify(json));
@@ -1321,6 +1403,17 @@ function resetLogFile() {
     websock.send("{\"command\":\"initlog\"}");
     alert("Log File Resetted!");
     location.reload();
+  }
+  else {
+    alert("Aborted!");
+  }
+}
+
+function deleteLog(index) {
+  if (confirm("Are you sure to delete this log?")) {
+    websock.send("{\"command\":\"deletelog\", \"index\":" + index + "}");
+    alert("Log entry deleted!");
+    loadLog();
   }
   else {
     alert("Aborted!");
@@ -1584,11 +1677,11 @@ function listStats(obj) {
   document.getElementById("heap").innerHTML = Math.round((obj.heap / 1024) * 10) / 10 + " kB";
   if (obj.hardwarerev === "ESP8266") {
     document.getElementById("heap").style.width = (obj.heap * 100) / 81920 + "%";
-    //document.getElementById("divintTemp").style.display = "none";
+    document.getElementById("divintTemp").style.display = "none";
   }
   else {
     document.getElementById("heap").style.width = (obj.heap * 100) / 327680 + "%";
-    //document.getElementById("int_temp").innerHTML = obj.int_temp + " °C";
+    document.getElementById("int_temp").innerHTML = obj.int_temp + " °C";
   }
   colorStatusbar(document.getElementById("heap"));
   document.getElementById("flash").innerHTML = Math.round((obj.availsize / 1024) * 10) / 10 + " kB";
@@ -1622,12 +1715,14 @@ function listStats(obj) {
   document.getElementById("evse_sharing_mode").innerHTML = obj.evse_sharing_mode;//2006
   document.getElementById("pp_detection").innerHTML = obj.evse_pp_detection;	//2007
   document.getElementById("meter_total").innerHTML = obj.meter_total;
+  document.getElementById("meter_current").innerHTML = obj.meter_current;
   document.getElementById("meter_p1").innerHTML = obj.meter_p1;
   document.getElementById("meter_p2").innerHTML = obj.meter_p2;
   document.getElementById("meter_p3").innerHTML = obj.meter_p3;
   document.getElementById("meter_p1_v").innerHTML = obj.meter_p1_v;
   document.getElementById("meter_p2_v").innerHTML = obj.meter_p2_v;
   document.getElementById("meter_p3_v").innerHTML = obj.meter_p3_v;
+  document.getElementById("meter_frequency").innerHTML = obj.meter_frequency;
   if (obj.hasOwnProperty("rssi")) {
     document.getElementById("rssi").innerHTML = " (" + obj.rssi + "dBm)";
     document.getElementById("rssi").style.fontWeight = 'bold';
@@ -1813,6 +1908,7 @@ function socketMessageListener(evt) {
       else {
         logdata[i].costs = String(round(logdata[i].price / 100 * logdata[i].energy)) + " €";
       }
+      logdata[i].index = i;
     }
     if (logdata.length > 0 || logtable === false) {
       document.getElementById("latestlogtable").innerHTML = null;
@@ -1842,7 +1938,11 @@ function login() {
   var passwd = document.getElementById("password").value;
   var url = "/login";
   var xhr = new XMLHttpRequest();
-  xhr.open("get", url, true, username, passwd);
+  if (window.location.protocol === "https:") {
+    xhr.open("get", url, true);
+  } else {
+    xhr.open("get", url, true, username, passwd);
+  }
   xhr.onload = function (e) {
     if (xhr.readyState === 4) {
       if (xhr.status === 200) {

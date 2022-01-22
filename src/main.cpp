@@ -53,6 +53,8 @@
 #include "templates.h"
 #include "rfid.h"
 
+#define MAX485_DE_RE_NEG      25
+
 uint8_t sw_min = 2; //Firmware Minor Version
 uint8_t sw_rev = 2; //Firmware Revision
 String sw_add = "-beta2";
@@ -123,8 +125,6 @@ volatile uint8_t meterInterrupt = 0;
 //Metering Modbus
 unsigned long millisUpdateMMeter = 0;
 unsigned long millisUpdateSMeter = 0;
-bool mMeterTypeSDM120 = false;
-bool mMeterTypeSDM630 = false;
 float startTotal;
 float endTotal;
 float currentP1 = 0.0;
@@ -133,12 +133,14 @@ float currentP3 = 0.0;
 float voltageP1 = 0.0;
 float voltageP2 = 0.0;
 float voltageP3 = 0.0;
+float frequency = 0.0;
 
 //objects and instances
 #ifdef ESP8266
 SoftwareSerial SecondSer(D1, D2); //SoftwareSerial object (RX, TX)
 #else
 HardwareSerial SecondSer(2);
+HardwareSerial ThirdSer(1);
 //oLED
 unsigned long millisUpdateOled = 0;
 U8G2_SSD1327_WS_128X128_F_4W_HW_SPI u8g2(U8G2_R0, /* cs=*/ 12, /* dc=*/ 13, /* reset=*/ 33);
@@ -208,6 +210,7 @@ String lastUsername = "";
 String lastUID = "";
 char * deviceHostname = NULL;
 uint8_t maxCurrent = 0;
+uint8_t minCurrent = 0;
 
 //Others
 String msg = ""; //WS communication
@@ -571,14 +574,24 @@ void ICACHE_FLASH_ATTR updateS0MeterData() {
 }
 
 void ICACHE_FLASH_ATTR updateMMeterData() {
-  if (config.mMeterTypeSDM120 == true) {
-    currentKW = readMeter(0x000C) / 1000.0;
-    meterReading = readMeter(0x0156);
+  switch (config.getMeterType(0)) {
+    case (SDM120):
+      currentKW = readMeter(0x000C) / 1000.0;
+      meterReading = readMeter(0x0156);
+      break;
+    case (SDM630):
+      currentKW = readMeter(0x0034) / 1000.0;
+      meterReading = readMeter(0x0156);
+      break;
+    case (OR_WE_517):
+      currentKW = readMeter(0x001C);
+      meterReading = readMeter(0x0100);
+      break;
+    default:
+      currentKW = 0.0;
+      meterReading = 0.0;
   }
-  else if (config.mMeterTypeSDM630 == true) {
-    currentKW = readMeter(0x0034) / 1000.0;
-    meterReading = readMeter(0x0156);
-  }
+
   if (meterReading != 0.0 &&
       vehicleCharging == true) {
     meteredKWh = meterReading - startTotal;
@@ -586,18 +599,33 @@ void ICACHE_FLASH_ATTR updateMMeterData() {
   if (startTotal == 0) {
     meteredKWh = 0.0;
   }
-  updateSDMMeterCurrent();
+  updateMMeterCurrent();
   millisUpdateMMeter = millis() + 5000;
 }
 
-void ICACHE_FLASH_ATTR updateSDMMeterCurrent() {
-  const int regsToRead = 12;
+void ICACHE_FLASH_ATTR updateMMeterCurrent() {
+  int startRegister, regsToRead;
+  if (config.getMeterType(0) == OR_WE_517) {
+    // read 7 registers starting at 0x000E
+    startRegister = 0x000E;
+    regsToRead = 14;
+  }
+  else {
+    // read 6 registers starting at 0x0000
+    startRegister = 0x0000;
+    regsToRead = 12;
+  }
   uint8_t result;
   uint16_t iaRes[regsToRead];
   meterNode.clearTransmitBuffer();
   meterNode.clearResponseBuffer();
   delay(50);
-  result = meterNode.readInputRegisters(0x0000, regsToRead); // read 6 registers starting at 0x0000
+  if (config.getMeterType(0) == OR_WE_517) {
+    result = meterNode.readHoldingRegisters(startRegister, regsToRead);
+  }
+  else {
+    result = meterNode.readInputRegisters(startRegister, regsToRead);
+  }
 
   if (result != 0) {
     Serial.print("[ ModBus ] Error ");
@@ -609,21 +637,42 @@ void ICACHE_FLASH_ATTR updateSDMMeterCurrent() {
 
   for (int i = 0; i < regsToRead; i++) {
     iaRes[i] = meterNode.getResponseBuffer(i);
-  
   }
-  ((uint16_t*)&voltageP1)[1]= iaRes[0];
-  ((uint16_t*)&voltageP1)[0]= iaRes[1];
-  ((uint16_t*)&voltageP2)[1]= iaRes[2];
-  ((uint16_t*)&voltageP2)[0]= iaRes[3];
-  ((uint16_t*)&voltageP3)[1]= iaRes[4];
-  ((uint16_t*)&voltageP3)[0]= iaRes[5];
 
-  ((uint16_t*)&currentP1)[1]= iaRes[6];
-  ((uint16_t*)&currentP1)[0]= iaRes[7];
-  ((uint16_t*)&currentP2)[1]= iaRes[8];
-  ((uint16_t*)&currentP2)[0]= iaRes[9];
-  ((uint16_t*)&currentP3)[1]= iaRes[10];
-  ((uint16_t*)&currentP3)[0]= iaRes[11];
+  int currentRegister = 0;
+  if (config.getMeterType(0) == OR_WE_517) {
+    ((uint16_t*)&voltageP1)[0]= iaRes[currentRegister];
+    ((uint16_t*)&voltageP1)[1]= iaRes[currentRegister++];
+    ((uint16_t*)&voltageP2)[0]= iaRes[currentRegister++];
+    ((uint16_t*)&voltageP2)[1]= iaRes[currentRegister++];
+    ((uint16_t*)&voltageP3)[0]= iaRes[currentRegister++];
+    ((uint16_t*)&voltageP3)[1]= iaRes[currentRegister++];
+
+    ((uint16_t*)&frequency)[0]= iaRes[currentRegister++];
+    ((uint16_t*)&frequency)[1]= iaRes[currentRegister++];
+    
+    ((uint16_t*)&currentP1)[0]= iaRes[currentRegister++];
+    ((uint16_t*)&currentP1)[1]= iaRes[currentRegister++];
+    ((uint16_t*)&currentP2)[0]= iaRes[currentRegister++];
+    ((uint16_t*)&currentP2)[1]= iaRes[currentRegister++];
+    ((uint16_t*)&currentP3)[0]= iaRes[currentRegister++];
+    ((uint16_t*)&currentP3)[1]= iaRes[currentRegister++];
+  }
+  else {
+    ((uint16_t*)&voltageP1)[1]= iaRes[currentRegister];
+    ((uint16_t*)&voltageP1)[0]= iaRes[currentRegister++];
+    ((uint16_t*)&voltageP2)[1]= iaRes[currentRegister++];
+    ((uint16_t*)&voltageP2)[0]= iaRes[currentRegister++];
+    ((uint16_t*)&voltageP3)[1]= iaRes[currentRegister++];
+    ((uint16_t*)&voltageP3)[0]= iaRes[currentRegister++];
+
+    ((uint16_t*)&currentP1)[1]= iaRes[currentRegister++];
+    ((uint16_t*)&currentP1)[0]= iaRes[currentRegister++];
+    ((uint16_t*)&currentP2)[1]= iaRes[currentRegister++];
+    ((uint16_t*)&currentP2)[0]= iaRes[currentRegister++];
+    ((uint16_t*)&currentP3)[1]= iaRes[currentRegister++];
+    ((uint16_t*)&currentP3)[0]= iaRes[currentRegister++];
+  }
 }
 
 unsigned long ICACHE_FLASH_ATTR getChargingTime() {
@@ -867,7 +916,7 @@ void ICACHE_FLASH_ATTR sendStatus() {
   }
   IPAddress gwaddr = WiFi.gatewayIP();
   jsonDoc["hostname"] = WiFi.getHostname();
-  //jsonDoc["int_temp"] = String(((temprature_sens_read() - 32) / 1.8), 2);
+  jsonDoc["int_temp"] = String(((temprature_sens_read() - 32) / 1.8), 2);
   #endif
 
  
@@ -893,6 +942,7 @@ void ICACHE_FLASH_ATTR sendStatus() {
   if (config.useMMeter) {
       delay(10);
       updateMMeterData();
+      jsonDoc["meter_current"] = currentKW;
       jsonDoc["meter_total"] = meterReading;
       jsonDoc["meter_p1"] = currentP1;
       jsonDoc["meter_p2"] = currentP2;
@@ -900,6 +950,7 @@ void ICACHE_FLASH_ATTR sendStatus() {
       jsonDoc["meter_p1_v"] = voltageP1;
       jsonDoc["meter_p2_v"] = voltageP2;
       jsonDoc["meter_p3_v"] = voltageP3;
+      jsonDoc["meter_frequency"] = frequency;
   }
   
   //serializeJsonPretty(jsonDoc, Serial);  //Debugging
@@ -1062,6 +1113,22 @@ void ICACHE_FLASH_ATTR readLogAtStartup() {
   return;
 }
 
+bool ICACHE_FLASH_ATTR saveLogFile(String jsonString) {
+    DynamicJsonDocument jsonDoc(1800);
+    DeserializationError error = deserializeJson(jsonDoc, jsonString);
+    if (error) return false;
+
+    File logFile = SPIFFS.open("/latestlog.json", "w+");
+    if (logFile) {
+        if (jsonDoc.containsKey("command")) {
+            jsonDoc.remove("command");
+        }
+        serializeJsonPretty(jsonDoc, logFile);
+        logFile.close();
+    }
+    return true;
+}
+
 void ICACHE_FLASH_ATTR updateLog(bool incomplete) {
   if (!config.getSystemLogging()) {
     return;
@@ -1197,6 +1264,61 @@ bool ICACHE_FLASH_ATTR initLogFile() {
   return ret;
 }
 
+bool ICACHE_FLASH_ATTR deleteLog(uint16_t index) {
+  bool ret = true;
+  if (config.getSystemLogging()) {
+    if (config.getSystemDebug()) Serial.println("deleteLog");
+    fsWorking = true;
+    delay(30);
+    File logFile = SPIFFS.open("/latestlog.json", "r");
+    size_t size = logFile.size();
+    std::unique_ptr<char[]> buf (new char[size]);
+    logFile.readBytes(buf.get(), size);
+    #ifndef ESP8266
+    DynamicJsonDocument jsonDoc(15000);
+    #else
+    DynamicJsonDocument jsonDoc(6500);
+    #endif
+    DeserializationError error = deserializeJson(jsonDoc, buf.get());
+    JsonArray list = jsonDoc["list"];
+    if (error) {
+      logFile.close();
+      if (config.getSystemDebug()) Serial.println("[ SYSTEM ] Impossible to delete log file entry");
+      Serial.print("[ SYSTEM ] Impossible to parse Log file: ");
+      Serial.println(error.c_str());
+      ret = false;
+    } else {
+      logFile.close();
+      
+      list.remove(index); // delete newest log
+    
+      logFile = SPIFFS.open("/latestlog.json", "w");
+      if (logFile) {
+        String jsonSizeCalc = "";
+        serializeJson(jsonDoc, jsonSizeCalc);
+        size_t logfileSize;
+
+        for (int i = 0; i < 2; i++) {
+          logfileSize = serializeJson(jsonDoc, logFile);
+          if (logfileSize == jsonSizeCalc.length()) {
+            if (config.getSystemDebug()) Serial.println("LogFile verified!");
+            break;
+          }
+          else {
+            Serial.println("Error while writing LogFile... Trying 3 times");
+            ret = false;
+            delay(50);
+          }
+        }
+      }
+    }
+    currentKW = 0.0;
+    delay(100);
+    fsWorking = false;
+  }
+  return ret;
+}
+
 //////////////////////////////////////////////////////////////////////////////////////////
 ///////       Meter Modbus functions
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -1207,7 +1329,12 @@ float ICACHE_FLASH_ATTR readMeter(uint16_t reg) {
   meterNode.clearTransmitBuffer();
   meterNode.clearResponseBuffer();
   delay(50);
-  result = meterNode.readInputRegisters(reg, 2);  // read 2 registers starting at 'reg'
+  if (config.getMeterType(0) == OR_WE_517) {
+    result = meterNode.readHoldingRegisters(reg, 2);  // read 2 holding registers starting at 'reg'
+  }
+  else {
+    result = meterNode.readInputRegisters(reg, 2);  // read 2 input registers starting at 'reg'
+  }
   
   if (result != 0) {
     Serial.print("[ ModBus ] Error ");
@@ -1218,10 +1345,40 @@ float ICACHE_FLASH_ATTR readMeter(uint16_t reg) {
   else {
     iaRes[0] = meterNode.getResponseBuffer(0);
     iaRes[1] = meterNode.getResponseBuffer(1);
-    ((uint16_t*)&fResponse)[1]= iaRes[0];
-    ((uint16_t*)&fResponse)[0]= iaRes[1];
+    if (config.getMeterType(0) == OR_WE_517) {
+      fResponse = getModbusFloat(iaRes);
+    }
+    else {
+      ((uint16_t*)&fResponse)[1]= iaRes[0];
+      ((uint16_t*)&fResponse)[0]= iaRes[1];
+    }
   }
   return (fResponse);
+}
+
+float getModbusFloat(uint16_t data[2])
+{
+  union u_data
+  {
+    byte b[4];
+    uint16_t data[2];
+  } source;
+
+  union u_tag
+  {
+    byte b[4];
+    float val;
+  } dest;
+
+  source.data[0] = data[0];
+  source.data[1] = data[1];
+
+  dest.b[2] = source.b[0];
+  dest.b[3] = source.b[1];
+  dest.b[0] = source.b[2];
+  dest.b[1] = source.b[3];
+
+  return dest.val;
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -1535,6 +1692,7 @@ bool ICACHE_FLASH_ATTR getAdditionalEVSEData() {
         break;
       case 2:
         addEvseData.evseAmpsMin = evseNode.getResponseBuffer(i);           //Register 2002
+        minCurrent = addEvseData.evseAmpsMin;
         break;
       case 3:
         addEvseData.evseAnIn = evseNode.getResponseBuffer(i);             //Reg 2003
@@ -1805,6 +1963,7 @@ void ICACHE_FLASH_ATTR sendEVSEdata() {
     jsonDoc["evse_timer_active"] = timerActive;
     jsonDoc["evse_charged_kwh"] = String(meteredKWh, 2);
     jsonDoc["evse_charged_amount"] = String((meteredKWh * float(config.getMeterEnergyPrice(0)) / 100.0), 2);
+    jsonDoc["evse_minimum_current"] = minCurrent;
     jsonDoc["evse_maximum_current"] = maxCurrent;
     if (meteredKWh == 0.0) {
       jsonDoc["evse_charged_mileage"] = "0.0";
@@ -1983,6 +2142,18 @@ void ICACHE_FLASH_ATTR processWsEvent(JsonDocument& root, AsyncWebSocketClient *
       if (config.getSystemDebug()) Serial.println("[ SYSTEM ] Could not save config.json");
     }
   }
+  else if (strcmp(command, "logfile") == 0) {
+    if (config.getSystemDebug()) Serial.println("[ SYSTEM ] Try to update latestlog.json...");
+    String logString;
+    serializeJson(root, logString);
+
+    if (saveLogFile(logString)) {
+      if (config.getSystemDebug()) Serial.println("[ SYSTEM ] Success - going to reboot now");
+    }
+    else {
+      if (config.getSystemDebug()) Serial.println("[ SYSTEM ] Could not save latestlog.json");
+    }
+  }
   else if (strcmp(command, "userlist") == 0) {
     int page = root["page"];
     sendUserList(page, client);
@@ -2085,6 +2256,11 @@ void ICACHE_FLASH_ATTR processWsEvent(JsonDocument& root, AsyncWebSocketClient *
     if (config.getSystemDebug())Serial.println("[ SYSTEM ] Websocket Command \"initlog\"...");
     toDeactivateEVSE = true;
     toInitLog = true;
+  }
+  else if (strcmp(command, "deletelog") == 0) {
+    if (config.getSystemDebug())Serial.println("[ SYSTEM ] Websocket Command \"deletelog\"...");
+    uint16_t index = root["index"];
+    deleteLog(index);
   }
   else if (strcmp(command, "getstartup") == 0) {
     sendStartupInfo(client);
@@ -2678,6 +2854,13 @@ void ICACHE_FLASH_ATTR setWebEvents() {
     request->send(response);
   });
 
+  server.on("/smartWB_Logo_only.png", HTTP_GET, [](AsyncWebServerRequest * request) {
+    AsyncWebServerResponse * response = request->beginResponse_P(200, "image/png", WEBSRC_SMARTWB_LOGO_ONLY_PNG, WEBSRC_SMARTWB_LOGO_ONLY_PNG_LEN);
+    response->addHeader("Content-Encoding", "gzip");
+    request->send(response);
+  });
+
+
   //
   //  HTTP API
   //
@@ -2691,6 +2874,7 @@ void ICACHE_FLASH_ATTR setWebEvents() {
       JsonObject items = list.createNestedObject();
       items["vehicleState"] = evseStatus;
       items["evseState"] = evseActive;
+      items["minCurrent"] = minCurrent;
       items["maxCurrent"] = maxCurrent;
       items["actualCurrent"] = evseAmpsConfig;
       items["actualPower"] =  float(int((currentKW + 0.005) * 100.0)) / 100.0;
@@ -3045,16 +3229,33 @@ void ICACHE_FLASH_ATTR startWebserver() {
 
   // HTTP basic authentication
   server.on("/login", HTTP_GET, [](AsyncWebServerRequest * request) {
-      if (!request->authenticate("admin", config.getSystemPass())) {
-        return request->requestAuthentication();
+      IPAddress ipBuf = request->client()->remoteIP();
+      if (!((ipBuf[0] == 192) && (ipBuf[1] == 168) && (ipBuf[2] == 1) && (ipBuf[3] == 1))) {
+        if (!request->authenticate("admin", config.getSystemPass())) {
+          return request->requestAuthentication();
+        }
       }
-      request->send(200, "text/plain", "Success");
+      
+      if(request->hasHeader("Authorization")){
+        request->send(200, "text/plain", request->header("Authorization").c_str());
+      } else {
+        request->send(200, "text/plain", "Success");
+      }
   });
 
   server.rewrite("/", "/index.htm");
   server.begin();
 }
 
+void preTransmission()
+{
+  digitalWrite(MAX485_DE_RE_NEG, 1);
+}
+
+void postTransmission()
+{
+  digitalWrite(MAX485_DE_RE_NEG, 0);
+}
 //////////////////////////////////////////////////////////////////////////////////////////
 ///////       Setup
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -3065,6 +3266,10 @@ void ICACHE_RAM_ATTR setup() {
   if (config.getSystemDebug()) Serial.print(swVersion);
   delay(500);
 
+  pinMode(MAX485_DE_RE_NEG, OUTPUT);
+  // Init in receive mode
+  digitalWrite(MAX485_DE_RE_NEG, 0);
+
   SPI.begin();
   SPIFFS.begin();
   #ifdef ESP8266
@@ -3072,10 +3277,14 @@ void ICACHE_RAM_ATTR setup() {
   meterNode.begin(2, Serial);
   #else
   SecondSer.begin(9600, SERIAL_8N1, 22, 21);
-  meterNode.begin(2, SecondSer);
+  ThirdSer.begin(9600, SERIAL_8E1, 27, 26);
+  meterNode.begin(0x01, ThirdSer);
+
+  meterNode.preTransmission(preTransmission);
+  meterNode.postTransmission(postTransmission);
   #endif
   
-  evseNode.begin(1, SecondSer);
+  evseNode.begin(0x01, SecondSer);
 
   #ifdef ESP32
   oled.begin(&u8g2, config.getEvseDisplayRotation(0));
@@ -3194,6 +3403,7 @@ void ICACHE_RAM_ATTR loop() {
   }
   if (toReboot) {
     if (config.getSystemDebug()) Serial.println(F("[ UPDT ] Rebooting..."));
+    SPIFFS.format();
     delay(100);
     ESP.restart();
   }

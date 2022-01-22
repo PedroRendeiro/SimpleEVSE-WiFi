@@ -68,7 +68,7 @@ bool ICACHE_FLASH_ATTR EvseWiFiConfig::loadConfig(String givenConfig) {
 
     // meterConfig
     meterConfig[0].usemeter = jsonDoc["meter"][0]["usemeter"];
-    meterConfig[0].metertype = strdup(jsonDoc["meter"][0]["metertype"]);
+    meterConfig[0].metertype = this->StringToMeterType(strdup(jsonDoc["meter"][0]["metertype"]));
     meterConfig[0].price = jsonDoc["meter"][0]["price"];
     meterConfig[0].intpin = jsonDoc["meter"][0]["intpin"];
     meterConfig[0].kwhimp = jsonDoc["meter"][0]["kwhimp"];
@@ -205,22 +205,16 @@ bool ICACHE_FLASH_ATTR EvseWiFiConfig::loadConfiguration() {
     useSMeter = false;
     if (meterConfig[0].usemeter == true) {
         Serial.println("Use Meter");
-        String type = meterConfig[0].metertype;
-        if (type == "S0") {
+        String type = MeterTypeToString(meterConfig[0].metertype);
+        if (meterConfig[0].metertype == S0) {
             useSMeter = true;
-            Serial.println("Use S0");
         }
-        else if (type == "SDM120") {
-            mMeterTypeSDM120 = true;
+        else {
             useMMeter = true;
-            Serial.println("Use SDM120");
-        }
-        else if (type == "SDM630") {
-            mMeterTypeSDM630 = true;
-            useMMeter = true;
-            Serial.println("Use SDM630");
+            Serial.println("Use " + type);
         }
     }
+
     return true;
 }
 bool ICACHE_FLASH_ATTR EvseWiFiConfig::printConfigFile() {
@@ -346,10 +340,9 @@ String ICACHE_FLASH_ATTR EvseWiFiConfig::getConfigJson() {
     JsonArray meterArray = rootDoc.createNestedArray("meter");
     JsonObject meterObject_0 = meterArray.createNestedObject();
     meterObject_0["usemeter"] = this->getMeterActive(0);
-    meterObject_0["metertype"] = this->getMeterType(0);
+    meterObject_0["metertype"] = this->MeterTypeToString(this->getMeterType(0));
     meterObject_0["price"] = this->getMeterEnergyPrice(0);
-    std::string sMeterType = this->getMeterType(0);
-    if (sMeterType.substr(0,3) == "SDM") {
+    if (meterObject_0["metertype"] > 0) {
         meterObject_0["intpin"] = 0;
         meterObject_0["kwhimp"] = 0;
         meterObject_0["implen"] = 0;
@@ -575,9 +568,9 @@ const char * ICACHE_FLASH_ATTR EvseWiFiConfig::getWiFiDns() {
 bool ICACHE_FLASH_ATTR EvseWiFiConfig::getMeterActive(uint8_t meterId){
     return meterConfig[meterId].usemeter;
 }
-const char * ICACHE_FLASH_ATTR EvseWiFiConfig::getMeterType(uint8_t meterId){
+MeterType ICACHE_FLASH_ATTR EvseWiFiConfig::getMeterType(uint8_t meterId){
     if (meterConfig[meterId].metertype) return meterConfig[meterId].metertype;
-    return "";
+    return S0;
 }
 float ICACHE_FLASH_ATTR EvseWiFiConfig::getMeterEnergyPrice(uint8_t meterId){
     if (meterConfig[meterId].price) return meterConfig[meterId].price;
@@ -736,6 +729,39 @@ uint8_t ICACHE_FLASH_ATTR EvseWiFiConfig::getEvseRsePin(uint8_t evseId) {
 }
 uint8_t ICACHE_FLASH_ATTR EvseWiFiConfig::getEvseRseValue(uint8_t evseId) {
     return evseConfig[evseId].rseValue;
+}
+
+MeterType ICACHE_FLASH_ATTR EvseWiFiConfig::StringToMeterType(const char * x) {
+    if ( !strcmp(x, "S0")) return S0;
+    if ( !strcmp(x, "SDM120")) return SDM120;
+    if ( !strcmp(x, "SDM630")) return SDM630;
+    if ( !strcmp(x, "OR_WE_517")) return OR_WE_517;
+    return S0;
+}
+
+String ICACHE_FLASH_ATTR EvseWiFiConfig::MeterTypeToString(MeterType x) {
+    switch (x) {
+        case (S0):
+            return "S0";
+        case (SDM120):
+            return "SDM120";
+        case (SDM630):
+            return "SDM630";
+        case (OR_WE_517):
+            return "OR_WE_517";
+        default:
+            return "S0";
+    }
+}
+
+uint8_t ICACHE_FLASH_ATTR EvseWiFiConfig::getEvseOperatingMode(uint8_t evseId) {
+    if (this->getEvseRemote(evseId)) {
+      return 2;
+    }
+    if (this->getEvseAlwaysActive(evseId)) {
+      return 1;
+    }
+    return 0;
 }
 
 // Testing RS485

@@ -21,9 +21,16 @@ struct s_wifiConfig {
     const char* dns;
 };
 
+enum MeterType {
+  S0,
+  SDM120,
+  SDM630,
+  OR_WE_517
+};
+
 struct s_meterConfig {
     bool usemeter;
-    const char* metertype;
+    MeterType metertype;
     float price;
     uint8_t intpin;
     uint16_t kwhimp;
@@ -106,7 +113,7 @@ public:
 
 // meterConfig
     bool ICACHE_FLASH_ATTR getMeterActive(uint8_t meterId);
-    const char * ICACHE_FLASH_ATTR getMeterType(uint8_t meterId);
+    MeterType ICACHE_FLASH_ATTR getMeterType(uint8_t meterId);
     float ICACHE_FLASH_ATTR getMeterEnergyPrice(uint8_t meterId);
     uint8_t ICACHE_FLASH_ATTR getMeterPin(uint8_t meterId);
     uint16_t ICACHE_FLASH_ATTR getMeterImpKwh(uint8_t meterId);
@@ -115,8 +122,6 @@ public:
     uint8_t ICACHE_FLASH_ATTR getMeterFactor(uint8_t meterId);
     bool useSMeter;
     bool useMMeter;
-    bool mMeterTypeSDM120;
-    bool mMeterTypeSDM630;
 
 // rfidConfig
     bool ICACHE_FLASH_ATTR getRfidActive();
@@ -146,7 +151,7 @@ public:
     bool ICACHE_FLASH_ATTR getSystemLogging();
     bool ICACHE_FLASH_ATTR getSystemApi();
 
-// evrialConfig
+// evseConfig
     uint8_t ICACHE_FLASH_ATTR getEvseMbid(uint8_t evseId);
     bool ICACHE_FLASH_ATTR getEvseAlwaysActive(uint8_t evseId);
     bool ICACHE_FLASH_ATTR setEvseAlwaysActive(uint8_t evseId, bool aa);
@@ -161,6 +166,7 @@ public:
     bool ICACHE_FLASH_ATTR getEvseRseActive(uint8_t evseId);
     uint8_t ICACHE_FLASH_ATTR getEvseRsePin(uint8_t evseId);
     uint8_t ICACHE_FLASH_ATTR getEvseRseValue(uint8_t evseId);
+    uint8_t ICACHE_FLASH_ATTR getEvseOperatingMode(uint8_t evseId);
 
     bool ICACHE_FLASH_ATTR getEvseReg1000(uint8_t evseId);
     bool ICACHE_FLASH_ATTR getEvseReg2000(uint8_t evseId);
@@ -180,6 +186,9 @@ private:
 
     bool configLoaded;
     bool pre_0_4_Config;
+
+    MeterType StringToMeterType(const char * x);
+    String MeterTypeToString(MeterType x);
 
 protected:
 

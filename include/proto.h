@@ -1,3 +1,12 @@
+#ifdef __cplusplus
+extern "C" {
+#endif
+uint8_t temprature_sens_read();
+#ifdef __cplusplus
+}
+#endif
+uint8_t temprature_sens_read();
+
 struct s_addEvseData {
     uint16_t evseAmpsAfterboot;  //Register 2000
     uint16_t evseModbusEnabled;  //Register 2001
@@ -17,7 +26,7 @@ void ICACHE_FLASH_ATTR parseBytes(const char*, char, byte*, int, int);
 void ICACHE_RAM_ATTR handleMeterInt();
 void ICACHE_FLASH_ATTR updateS0MeterData();
 void ICACHE_FLASH_ATTR updateMMeterData();
-void ICACHE_FLASH_ATTR updateSDMMeterCurrent();
+void ICACHE_FLASH_ATTR updateMMeterCurrent();
 unsigned long ICACHE_FLASH_ATTR getChargingTime();
 void ICACHE_FLASH_ATTR rfidloop();
 bool ICACHE_FLASH_ATTR getAdditionalEVSEData();
@@ -28,6 +37,7 @@ void ICACHE_FLASH_ATTR updateLog(bool);
 float ICACHE_FLASH_ATTR getS0MeterReading();
 bool ICACHE_FLASH_ATTR initLogFile();
 float ICACHE_FLASH_ATTR readMeter(uint16_t);
+float getModbusFloat(uint16_t data[2]);
 bool ICACHE_FLASH_ATTR queryEVSE(bool);
 bool ICACHE_FLASH_ATTR activateEVSE();
 bool ICACHE_FLASH_ATTR deactivateEVSE(bool);
